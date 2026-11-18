@@ -6,6 +6,8 @@ Design points (they follow from Groq's per-minute / per-day token limits):
     of what sits under each option, so the prompt never carries the whole tree
   * every answer is cached on disk (re-runs are free and interrupted runs resume)
   * 429 handling honours retry-after; a daily-quota error stops cleanly instead of waiting hours
+  * reasoning models (gpt-oss) think before answering: they get low reasoning effort and extra output
+    room, and any reply that is cut off is retried in smaller batches
 """
 import hashlib
 import json
@@ -21,7 +23,8 @@ from .config import ConfigError
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 PROMPT_VERSION = "v1"
 SEP = "|"
-PROGRESS_STEP = 50
+REASONING_SLACK = 1500          # extra output tokens a reasoning model may need per call (grows on retries)
+REASONING_EST = 500             # what we expect it to actually use (for the rate limiter)
 
 
 class QuotaExhausted(Exception):
@@ -40,6 +43,7 @@ class GroqClient:
         self.window = []                 # (timestamp, tokens) of recent requests
         self.tokens_used = 0
         self.calls = 0
+        self.last_finish = None
 
     def _throttle(self, est):
         while True:
@@ -50,8 +54,9 @@ class GroqClient:
                 return
             self.sleep(max(60 - (t - self.window[0][0]) + 0.2, 0.5))
 
-    def chat(self, system, user, max_tokens):
-        est = (len(system) + len(user)) // 3 + max_tokens
+    def chat(self, system, user, max_tokens, est_out=None):
+        """est_out: tokens we expect to produce (for the rate limiter); max_tokens is only the ceiling."""
+        est = (len(system) + len(user)) // 3 + (est_out if est_out is not None else max_tokens)
         payload = {"model": self.model, "temperature": 0, "max_completion_tokens": max_tokens,
                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         # GPT-OSS supports reasoning; keep it modest for short classification jobs.
@@ -73,6 +78,7 @@ class GroqClient:
                 self.window.append((self.now(), tok))
                 self.tokens_used += tok
                 self.calls += 1
+                self.last_finish = body["choices"][0].get("finish_reason")
                 return body["choices"][0]["message"]["content"]
             text = (getattr(r, "text", "") or "").lower()
             if r.status_code == 429:
@@ -87,8 +93,12 @@ class GroqClient:
             if r.status_code >= 500:
                 self.sleep(2 ** attempt)
                 continue
+            if r.status_code == 400 and "reasoning_effort" in payload and "reasoning" in text:
+                payload.pop("reasoning_effort")           # this model does not accept it
+                continue
             raise RuntimeError(f"Groq error {r.status_code}: {text[:300]}")
         raise RuntimeError("Groq: too many retries")
+
 
 # ------------------------------------------------------------------ cache
 class Cache:
@@ -155,9 +165,13 @@ class Labeler:
         self.flat_max = lc.get("flat_max_leaves", 80)
         self.batch = lc.get("batch_items", 40)
         self.domain = (" for " + lc["domain_hint"]) if lc.get("domain_hint") else ""
+        self.reasoning = "gpt-oss" in client.model.lower() or bool(lc.get("reasoning_model", False))
         self.cache = Cache(cache_path)
         self.asked = 0
         self.cache_hits = 0
+        self.first_pass_asked = 0
+        self.first_pass_answered = 0
+        self.bad_sample = None
         self.quota = None
 
     # --- one batch of items against a list of options
@@ -172,19 +186,28 @@ class Labeler:
                 self.cache_hits += 1
             else:
                 todo.append(pos)
-        for attempt in range(2):                      # second pass re-asks whatever was missing
+        for attempt in range(3):                      # later passes re-ask what is missing, in smaller batches
             if not todo or self.quota:
                 break
-            for s in range(0, len(todo), self.batch):
-                chunk = todo[s:s + self.batch]
+            size = self.batch if attempt == 0 else max(5, self.batch // (2 ** attempt))
+            for s in range(0, len(todo), size):
+                chunk = todo[s:s + size]
                 user = "\n".join(f"{n + 1}|{items[p][1]}" for n, p in enumerate(chunk))
+                out_tokens = 14 * len(chunk) + 60
+                slack = REASONING_SLACK * (attempt + 1) if self.reasoning else 0
                 try:
-                    content = self.client.chat(_system(self.domain, scope, options), user, 14 * len(chunk) + 60)
+                    content = self.client.chat(_system(self.domain, scope, options), user, out_tokens + slack,
+                                               est_out=out_tokens + (REASONING_EST if self.reasoning else 0))
                 except QuotaExhausted as e:
                     self.quota = str(e)
                     return result
                 self.asked += len(chunk)
                 got = _parse(content, len(chunk), set(valid))
+                if attempt == 0:
+                    self.first_pass_asked += len(chunk)
+                    self.first_pass_answered += len(got)
+                if len(got) < len(chunk) and self.bad_sample is None:
+                    self.bad_sample = f"finish_reason={self.client.last_finish}; reply starts: {(content or '')[:300]!r}"
                 for n, p in enumerate(chunk):
                     if n + 1 in got:
                         oid, conf = got[n + 1]
@@ -231,6 +254,11 @@ class Labeler:
         res = self._flat(lines) if len(self.tree) <= self.flat_max else self._hierarchical(lines)
         if self.cache_hits:
             self.log(f"  checkpoint: restored {self.cache_hits:,} answer(s) from {self.cache.path}")
+        if self.first_pass_asked:
+            cov = self.first_pass_answered / self.first_pass_asked
+            self.log(f"  first-pass coverage {cov:.0%} ({self.first_pass_answered:,}/{self.first_pass_asked:,} usable answers)")
+            if cov < 0.8 and self.bad_sample:
+                self.log(f"  WARNING low coverage. Sample of a bad reply: {self.bad_sample}")
         if self.quota:
             self.log(f"LLM quota exhausted ({self.quota[:80]}); {len(lines) - len(res)} items use the local method")
         keys = items["item_key"].tolist()
@@ -242,11 +270,12 @@ class Labeler:
         options = [(i + 1, p.replace(SEP, " > "), "") for i, p in enumerate(leaves)]
         back = {p.replace(SEP, " > "): p for p in leaves}
         res = {}
-        for s in range(0, len(lines), PROGRESS_STEP):
-            part = self._ask(lines[s:s + PROGRESS_STEP], options, "Choose the leaf category.", "flat")
+        step = self.batch                                   # one call per progress line
+        for s in range(0, len(lines), step):
+            part = self._ask(lines[s:s + step], options, "Choose the leaf category.", "flat")
             for p, (label, conf) in part.items():
                 res[s + p] = (back[label], conf)
-            done = min(s + PROGRESS_STEP, len(lines))
+            done = min(s + step, len(lines))
             self.log(self._progress(done, len(lines), len(res)))
             if self.quota:
                 break

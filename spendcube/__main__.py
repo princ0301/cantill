@@ -6,7 +6,8 @@ from .config import load_config
 from .ingest import ingest, load_labels
 from .clean import clean
 from .exclusions import apply_exclusions, apply_duplicates, rule_coverage
-from .evaluate import exclusion_report, hidden_po_check, entity_report, pairwise_scores, class_report, holdout_ids
+from .evaluate import (exclusion_report, hidden_po_check, entity_report, pairwise_scores, class_report,
+                       class_report_by_method, holdout_ids)
 from .entities import build_keys
 from .classify import load_tree, classify
 from .embed import make_embedder, EmbeddingsUnavailable
@@ -126,6 +127,12 @@ def main():
     v.add_argument("--data-dir", required=True)
     v.add_argument("--file", required=True)
     v.add_argument("--labels-dir")
+    pr = sub.add_parser("profile", help="look at raw files and a tree file; print a column profile and draft a config")
+    pr.add_argument("--file", action="append", required=True, help="a raw data file (repeat for several)")
+    pr.add_argument("--tree", help="the category tree csv")
+    pr.add_argument("--company", default="C")
+    pr.add_argument("--currency", default="USD")
+    pr.add_argument("--out", help="write the draft config here (default: print it)")
     args = p.parse_args()
 
     if args.cmd == "ingest":
@@ -253,6 +260,8 @@ def main():
             print(acc.to_string(index=False))
             print("\nconfidence calibration (leaf level):")
             print(cal.to_string())
+            print("\naccuracy by how the line was labelled:")
+            print(class_report_by_method(out, labels["leaf"], n, record_ids=ids).to_string())
             if "llm_only_pred" in out.attrs:
                 o2 = out.copy()
                 o2["leaf_pred"] = out.attrs["llm_only_pred"].reindex(out.index).fillna(out["leaf_pred"])
@@ -304,6 +313,29 @@ def main():
             print("ERROR:", e)
         print("validation passed" if not errors else "VALIDATION FAILED")
         raise SystemExit(1 if errors else 0)
+
+    if args.cmd == "profile":
+        from .profile import profile_frame, draft_config
+        files = []
+        for f in args.file:
+            df = pd.read_csv(f, dtype=str, keep_default_na=False, encoding="utf-8-sig", nrows=200000)
+            files.append((f, df))
+            print(f"\n== {f}: {len(df):,} rows")
+            print(profile_frame(df).to_string(index=False))
+        levels = None
+        if args.tree:
+            t = pd.read_csv(args.tree, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+            levels = list(t.columns)[:4]
+            print(f"\n== tree {args.tree}: {len(t)} rows, columns {list(t.columns)}")
+            if len(t.columns) > 4:
+                print("WARNING: more than 4 columns; the output has only l1..l4 - check which are levels")
+        text = draft_config(files, args.tree, args.company, args.currency, levels)
+        if args.out:
+            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"\ndraft config written to {args.out} - edit the TODOs")
+        else:
+            print("\n---- draft config ----\n" + text)
 
 
 if __name__ == "__main__":

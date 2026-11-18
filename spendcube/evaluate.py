@@ -129,3 +129,20 @@ def holdout_ids(df, labels, frac, seed=3):
     ug = g.unique()
     pick = set(np.random.default_rng(seed).choice(ug, int(len(ug) * frac), replace=False))
     return set(lab["record_id"][g.isin(pick)])
+
+
+
+def class_report_by_method(out, truth_leaf, n_levels, record_ids=None):
+    """Accuracy split by how each line was labelled (llm, llm+model, self_trained, supervised, ...)."""
+    from .classify import split_path
+    rows = out[(out["include"] == 1) & out["record_id"].isin(truth_leaf.dropna().index)]
+    if record_ids is not None:
+        rows = rows[rows["record_id"].isin(set(record_ids))]
+    truth = truth_leaf.reindex(rows["record_id"]).to_numpy()
+    t1 = np.array([split_path(x, n_levels)[0] for x in truth])
+    d = pd.DataFrame({"method": rows["class_method"].to_numpy(), "l1": rows["l1"].to_numpy() == t1,
+                      "leaf": rows["leaf_pred"].to_numpy() == truth, "w": rows["spend"].abs().to_numpy()})
+    res = []
+    for m, g in d.groupby("method"):
+        res.append((m, len(g), g["l1"].mean(), g["leaf"].mean(), (g["leaf"] * g["w"]).sum() / max(g["w"].sum(), 1e-9)))
+    return pd.DataFrame(res, columns=["method", "lines", "L1_accuracy", "leaf_accuracy", "spend_weighted_leaf"]).round(4).set_index("method")
