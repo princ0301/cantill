@@ -1,11 +1,8 @@
-"""Look at a raw file and draft a config for it. Meant for a new company (the blind-test 'company C'):
-it prints what each column looks like and writes a first-guess YAML to edit, not a finished one."""
 import re
 from pathlib import Path
 import pandas as pd
 from .clean import parse_amount, parse_dates
 
-# role -> (name hints, content kind); first hints match best
 ROLES = {
     "date": (["invoice_date", "posting_date", "date", "datum", "fecha", "data", "dt"], "date"),
     "vendor_id": (["vendor_id", "supplier_id", "vendor id", "supplier id", "vendor_no", "supplier_no", "creditor", "lifnr", "vendor_code"], "id"),
@@ -87,7 +84,6 @@ def suggest(df):
             continue
         chosen[role] = c
         used.add(c)
-    # record id: a column whose values are unique, preferring id-like names
     best = None
     for c in df.columns:
         s = df[c].astype(str)

@@ -7,7 +7,6 @@ _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], 1)}
 
 
-# ---------------------------------------------------------------- amounts
 def parse_amount(s, decimal=None):
     """Parse messy number text. Returns (float Series, decimal char used).
 
@@ -37,7 +36,6 @@ def parse_amount(s, decimal=None):
     return val, decimal
 
 
-# ------------------------------------------------------------------ tax
 def parse_tax(s, default):
     """Return (rate Series as fraction, source Series 'given'|'default'|'bad')."""
     x = s.astype(str).str.strip()
@@ -52,7 +50,6 @@ def parse_tax(s, default):
     return rate.fillna(default), source
 
 
-# ----------------------------------------------------------------- dates
 def parse_dates(s, default_order="dmy"):
     """Parse mixed date formats. Returns (datetime Series, flag Series).
 
@@ -104,7 +101,6 @@ def parse_dates(s, default_order="dmy"):
     return dt, flag
 
 
-# -------------------------------------------------------------------- fx
 def load_fx(fxcfg, data_dir, extra_dirs=()):
     path = find_file(fxcfg["file"], data_dir, *extra_dirs)
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
@@ -145,7 +141,6 @@ def fx_lookup(table, cur, month_int):
     return rate, method
 
 
-# ------------------------------------------------------------- pipeline
 def clean(df, cfg, data_dir):
     """Add cleaned columns to the ingested frame (one pass per source)."""
     df = df.copy()

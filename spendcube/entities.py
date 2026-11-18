@@ -49,7 +49,6 @@ def _majority(keys):
     return keys.value_counts().index[0]
 
 
-# ---------------------------------------------------------------- suppliers
 def supplier_keys(df, cfg, labels=None):
     ent = cfg.get("entities", {})
     thr = ent.get("supplier_merge_threshold", 92)
@@ -106,7 +105,6 @@ def supplier_keys(df, cfg, labels=None):
     return key
 
 
-# -------------------------------------------------------------------- items
 def item_keys(df, cfg, labels=None):
     ent = cfg.get("entities", {})
     min_share = ent.get("text_link_min_share", 0.8)
@@ -156,7 +154,6 @@ def item_keys(df, cfg, labels=None):
     return key
 
 
-# ----------------------------------------------------------------- driver
 def build_keys(df, cfg, labels=None, inherit=True):
     """Add supplier_key and item_key. Matched records inherit their match's keys."""
     out = df.copy()

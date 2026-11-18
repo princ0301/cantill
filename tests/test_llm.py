@@ -137,7 +137,6 @@ def test_hierarchical_mode_goes_level_by_level_and_skips_single_child():
     got = dict(zip(out["item_key"], out["leaf"]))
     assert got["k0"] == "Goods|Fasteners|Bolts" and got["k1"] == "Goods|Chemicals|Resin"
     assert got["k2"] == "Services|Transport|Freight"
-    # level 1 once, level 2 once per parent (Goods, Services), level 3 only for Fasteners (Chemicals/Transport have one leaf)
     systems = [c["messages"][0]["content"] for c in srv.calls]
     assert len(systems) == 4 and "Level 1 of 3" in systems[0]
     assert all("Goods > Fasteners > Bolts" not in s for s in systems)       # the full tree is never sent

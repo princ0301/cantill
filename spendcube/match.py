@@ -68,7 +68,7 @@ def match_systems(df, cfg, hide=None, use_siblings=True, use_window=True, slack=
     if hide:
         S.loc[S["record_id"].isin(hide), "po_n"] = np.nan
 
-    # ---- PO per secondary line: own, else recovered from siblings (same supplier + invoice number)
+    # Recover missing POs from siblings with the same supplier and invoice number.
     S["po_src"] = np.where(S["po_n"].notna(), "own", "")
     if use_siblings:
         key = S["sn"] + "|" + S["inv_n"]
@@ -81,7 +81,7 @@ def match_systems(df, cfg, hide=None, use_siblings=True, use_window=True, slack=
     P = P[P["po_n"].notna()].sort_values("po_n", key=lambda s: s.astype("int64"))
     p_po_int = P["po_n"].astype("int64").to_numpy()
 
-    # ---- stage 1: PO known and present in the primary system
+    # Match known POs in the primary system.
     pairs = S[S["po_n"].notna()].reset_index().rename(columns={"index": "s_ix"}).merge(
         P.reset_index().rename(columns={"index": "p_ix"}), on="po_n", suffixes=("", "_p"))
     pairs["amt_ok"] = (pairs["amt"] - pairs["amt_p"]).abs() <= np.maximum(tol_abs, tol_rel * pairs["amt_p"].abs())
@@ -96,7 +96,7 @@ def match_systems(df, cfg, hide=None, use_siblings=True, use_window=True, slack=
     out.loc[best["s_ix"], "match_kind"] = kind
     matched = set(best["s_ix"])
 
-    # ---- stage 2: no usable PO -> PO window from neighbours in id order
+    # Match missing POs from neighbouring PO ranges.
     if use_window and cs.get("order_key") and len(P):
         S["ord"] = pd.to_numeric(S["record_id"].str.extract(r"(\d+)$")[0], errors="coerce")
         S = S.sort_values("ord")
@@ -129,7 +129,7 @@ def match_systems(df, cfg, hide=None, use_siblings=True, use_window=True, slack=
                 out.loc[ix, "match_kind"] = "window"
                 out.loc[ix, "match_note"] = f"{int(good.sum())} candidate(s)"
 
-    # ---- stage 3: repeated exports inside the secondary system (not already matched to primary)
+    # Detect repeated secondary exports not matched to the primary system.
     still = out.loc[S.index, "match_to"] == ""
     if "include" in out.columns:
         still &= out.loc[S.index, "include"] == 1

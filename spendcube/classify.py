@@ -1,11 +1,3 @@
-"""Classify lines into the company's category tree (any number of levels, read from a file).
-
-Methods, used in this order of preference:
-  supervised   labelled lines exist (training labels / seed labels): TF-IDF + context -> linear model
-  zero-shot    no labels: lines are scored against the tree's own words, then self-trained
-Optional layers on top: an LLM (Groq) labels unique items; local embeddings improve the zero-shot step.
-Confidence is calibrated on held-out data when labels exist.
-"""
 import re
 import numpy as np
 import pandas as pd
@@ -19,8 +11,6 @@ from .match import _OCR, norm_text
 
 SEP = "|"
 
-
-# ------------------------------------------------------------------ tree
 def load_tree(cfg, data_dir):
     """Leaves of the tree: one row per leaf with the level names, a path string and the depth."""
     tc = cfg.get("tree")
@@ -39,13 +29,10 @@ def load_tree(cfg, data_dir):
     t["path"] = t[levels].apply(lambda r: SEP.join(v for v in r if v), axis=1)
     return t
 
-
 def split_path(path, n):
     parts = path.split(SEP) if path else []
     return parts + [""] * (n - len(parts))
 
-
-# -------------------------------------------------------------- features
 def _ctx_tokens(df, fields):
     sup = df["supplier_cluster"] if "supplier_cluster" in df.columns else df["supplier_key"]
     cols = [("S:" + sup.astype(str))]
@@ -57,14 +44,11 @@ def _ctx_tokens(df, fields):
         out = out + "||" + c
     return out
 
-
 def _split_ctx(s):
     return s.split("||")
 
-
 def _text(df):
     return (df["description"].astype(str) + " " + df["gl_text"].astype(str)).str.upper().str.translate(_OCR)
-
 
 class Features:
     def __init__(self, ctx_fields=(), ctx_weight=2.0, extra_weight=1.0):
@@ -90,25 +74,20 @@ class Features:
     def transform(self, df, extra=None):
         return self._blocks(df, extra, False)
 
-
 def _fit(df, y, ctx_fields, C=0.5, extra=None):
     f = Features(ctx_fields)
     X = f.fit_transform(df, extra)
     return f, LinearSVC(C=C, random_state=0).fit(X, y)
-
 
 def _scores(model, X):
     """Decision scores as an (n, classes) matrix, also for two classes (where sklearn returns 1-D)."""
     sc = model.decision_function(X)
     return np.column_stack([-sc, sc]) if sc.ndim == 1 else sc
 
-
 def _margin(scores):
     s = np.sort(scores, axis=1)
     return s[:, -1] - s[:, -2]
 
-
-# ------------------------------------------------------------ supervised
 def supervised(train, y, target, ctx_fields, folds=5):
     """Train on `train`, predict `target`. Returns (leaf path, confidence, calibration table)."""
     groups = norm_text(train["description"]).to_numpy()
@@ -126,8 +105,6 @@ def supervised(train, y, target, ctx_fields, folds=5):
     pred = m.classes_[sc.argmax(1)]
     return pred, iso.predict(_margin(sc)), float(ok.mean())
 
-
-# ------------------------------------------------------------- zero-shot
 def zero_shot(target, tree, ctx_fields, emb=None, leaf_emb=None, rounds=2, seed_share=0.3):
     """No labels: score lines against the tree's words (and embeddings if given), then self-train."""
     leaf_text = tree["path"].str.replace(SEP, " ", regex=False).str.upper()
@@ -149,7 +126,6 @@ def zero_shot(target, tree, ctx_fields, emb=None, leaf_emb=None, rounds=2, seed_
         pred, margin = m.classes_[sc.argmax(1)], _margin(sc)
     conf = np.clip(0.05 + 0.4 * (margin - margin.min()) / (np.ptp(margin) + 1e-9), 0.05, 0.45)
     return pred, conf
-
 
 def self_train(target, seed, ctx_fields, groups, extra=None, folds=5):
     """Learn from (LLM) seed labels with supplier context.
@@ -183,11 +159,8 @@ def self_train(target, seed, ctx_fields, groups, extra=None, folds=5):
     sc = _scores(m, f.transform(target, ex))
     return oof, m.classes_[sc.argmax(1)], _margin(sc), oof_margin
 
-
-# ----------------------------------------------------------------- driver
 def _top(s):
     return s.value_counts().index[0]
-
 
 def item_table(target, llm_ctx_fields=()):
     """Unique items among the target rows (largest spend first) for LLM labelling."""
@@ -207,7 +180,6 @@ def item_table(target, llm_ctx_fields=()):
     tbl = tbl.sort_values("spend", ascending=False)
     tbl.index.name = "item_key"
     return tbl.reset_index()
-
 
 def classify(df, cfg, tree, labels=None, llm=None, embedder=None, llm_limit=None, refine_below=None):
     """Add l1..lN, confidence, class_method for included, non-duplicate lines.

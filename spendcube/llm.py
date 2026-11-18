@@ -31,7 +31,6 @@ class QuotaExhausted(Exception):
     pass
 
 
-# ----------------------------------------------------------------- client
 class GroqClient:
     def __init__(self, model="openai/gpt-oss-120b", api_key=None, tpm_budget=5000, rpm=25,
                  post=None, sleep=time.sleep, now=time.time, url=GROQ_URL, max_retries=6):
@@ -59,9 +58,6 @@ class GroqClient:
         est = (len(system) + len(user)) // 3 + (est_out if est_out is not None else max_tokens)
         payload = {"model": self.model, "temperature": 0, "max_completion_tokens": max_tokens,
                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-        # GPT-OSS supports reasoning; keep it modest for short classification jobs.
-        # No response_format is used: Groq may reject a generation that fails server-side
-        # JSON validation, while _parse below already validates the returned answer.
         if self.model.startswith("openai/gpt-oss-"):
             payload["reasoning_effort"] = "low"
         headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
@@ -100,7 +96,6 @@ class GroqClient:
         raise RuntimeError("Groq: too many retries")
 
 
-# ------------------------------------------------------------------ cache
 class Cache:
     """Append-only checkpoint store; each accepted LLM answer is durable immediately."""
     def __init__(self, path):
@@ -125,7 +120,6 @@ class Cache:
                 f.write(json.dumps({"k": k, "v": v}) + "\n")
 
 
-# ---------------------------------------------------------------- prompts
 def _parse(content, n_items, valid_ids):
     m = re.search(r"\{.*\}", content or "", re.S)
     if not m:
@@ -174,7 +168,6 @@ class Labeler:
         self.bad_sample = None
         self.quota = None
 
-    # --- one batch of items against a list of options
     def _ask(self, items, options, scope, scope_key):
         """items: list of (key_text, line_str); options: [(id, label, hint)]. Returns {pos: (label, conf)}."""
         valid = {o[0]: o[1] for o in options}
@@ -243,7 +236,6 @@ class Labeler:
             out.append((nm, hint))
         return out
 
-    # --- public
     def label_items(self, items, limit=None):
         """items: DataFrame with item_key, text, supplier, ctx (largest spend first).
         Returns DataFrame item_key, leaf, conf (conf in 0..1) for the items that got an answer."""

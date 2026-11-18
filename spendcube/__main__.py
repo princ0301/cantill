@@ -335,7 +335,7 @@ def main():
             Path(args.out).write_text(text, encoding="utf-8")
             print(f"\ndraft config written to {args.out} - edit the TODOs")
         else:
-            print("\n---- draft config ----\n" + text)
+            print("\nDraft config:\n" + text)
 
 
 if __name__ == "__main__":
