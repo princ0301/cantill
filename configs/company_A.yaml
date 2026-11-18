@@ -1,0 +1,77 @@
+company: A
+reporting_currency: ZAR
+sources:
+  - name: erp
+    file: company_A/erp_goods_receipts.csv
+    id: {prefix: "ERP:", column: line_id}
+    columns:
+      date: posting_date
+      supplier: supplier_name
+      vendor_id: vendor_id
+      description: [material_short_text, service_short_text]
+      item_code: material_number
+      quantity: quantity
+      amount: value_zar
+      po: po_number
+      po_item: po_item
+    amount_basis: net
+    extra: [source_system, spend_type, material_type, cost_centre, contract_status, opex_capex, site_name, receipt_document, receipt_item]
+  - name: tool
+    file: company_A/invoice_tool_export.csv
+    id: {prefix: "TOOL:", column: tool_record_id}
+    columns:
+      date: invoice_date
+      supplier: supplier_name_as_captured
+      description: line_text
+      quantity: quantity
+      amount: gross_amount
+      currency: currency
+      tax_rate: vat_rate
+      status: status
+      po: po_reference
+      invoice: invoice_number
+    amount_basis: gross
+    status:
+      include: [Approved, Paid]
+      cancelled: [Cancelled]
+      not_approved: [On Hold, Rejected, Submitted, Disputed]
+    default_tax_rate: 0.15
+
+cross_system:
+  primary: erp
+  secondary: tool
+  po_regex: '(45[0-9]{8})'        # a PO inside "PO#4510085877", "4510085877/10.0", ...
+  amount_tol: {abs: 0.02, rel: 0.0005}
+  text_threshold: 80
+  supplier_threshold: 85
+  order_key: record_id            # tool ids rise with PO number; used to find POs for lines without one
+  order_slack: 200
+  date_lag_days: [-60, 180]       # invoice date minus receipt date, checked only when both exist
+
+labels:                           # the client's golden keys for ERP lines; used when the file is available
+  file: company_A/labels_A.csv
+  id: record_id
+  supplier_key: supplier_key
+  item_key: item_key
+  categories: [category_l1, category_l2, category_l3]
+
+entities:
+  supplier_merge_threshold: 92    # names at least this similar (after normalising) are one supplier
+  max_names_per_vendor: 3         # a vendor id with more names than this is treated as a collective account
+  text_link_min_share: 0.8
+  item_fuzzy_threshold: 92
+
+tree:
+  file: company_A/taxonomy_A.csv
+  levels: [category_l1, category_l2, category_l3]
+
+classify:
+  llm:
+    model: openai/gpt-oss-120b
+    tpm_budget: 5000
+    domain_hint: an underground mining company in South Africa
+    context_fields: [x_spend_type]
+    batch_items: 40
+    flat_max_leaves: 80
+    refine_below: 0.6
+  context_fields: [x_spend_type, x_material_type]   # extra columns that help (besides the supplier)

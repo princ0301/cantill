@@ -1,0 +1,18 @@
+# Generic non-procurement rules, applied to every company unless the config sets
+# `use_default_rules: false`. They are deliberately conservative (high precision):
+# company-specific rules belong in the company config.
+rules:
+  - name: tax_label_description
+    code: NON_PROCUREMENT
+    field: description
+    # description STARTS with a tax label ("State & Local Taxes", "GST Input Tax", "Sales Tax").
+    # "Tax advisory ..." and mentions of VAT inside a normal description are NOT matched.
+    regex: '^\W*(?:accrued\W+)?(?:(?:state|local|rtd|sales|use|income|property|payroll|withholding|input|output|excise|gst|vat)\W*)*\btax(?:es)?\b(?!\W+(?:advis|consult|software|service|prep|audit|support|compliance|filing|return))'
+  - name: intercompany
+    code: NON_PROCUREMENT
+    field: [description, supplier, gl_text]
+    regex: '\b(?:inter-?company|intra-?company|i/c)\b'
+  - name: royalties_dividends_interest
+    code: NON_PROCUREMENT
+    field: [description, gl_text]
+    regex: '\b(?:royalt(?:y|ies)|dividends?|interest\s+(?:expense|charges?|paid|payment)|loan\s+(?:repayment|interest)|bank\s+charges?)\b'

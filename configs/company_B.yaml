@@ -1,0 +1,69 @@
+company: B
+reporting_currency: USD
+fx:
+  file: company_B/fx_rates_usd.csv
+  currency: currency
+  month: month
+  rate: units_per_usd
+  fallback_date: x_posting_date   # used when the invoice date is blank or outside the table
+sources:
+  - name: lines
+    file: company_B/invoice_lines.csv
+    id: {prefix: "", column: line_id}
+    columns:
+      date: invoice_date
+      vendor_id: vendor_id
+      description: line_description
+      item_code: material_number
+      quantity: quantity
+      amount: line_amount
+      currency: currency
+      currency_rate: currency_rate
+      po: po_number
+      po_item: po_line
+      invoice: invoice_number
+      gl_text: [gl_account, gl_account_description]
+      doc_type: document_type
+    amount_basis: net
+    extra: [source_system, region, posting_date, paid_date, supplier_type, po_type, transport_flag, company_code, plant, cost_centre, payment_terms]
+
+# Rules found by comparing the 3,000 seed labels with the data (all 450 seed exclusions
+# are NON_PROCUREMENT; these rules reproduce them with no false positives).
+exclusions:
+  - name: intercompany_gl_account          # GL description IC06, IC05, "IC Payables", "I/C Payable", ...
+    code: NON_PROCUREMENT
+    field: gl_text
+    regex: '[|] *(?:IC[0-9]+|IC +Payables?|I/C(?![A-Za-z]))'
+  - name: intercompany_supplier_type       # supplier types 5406 and 2742 are always excluded in the seed
+    code: NON_PROCUREMENT
+    field: x_supplier_type
+    values: ["5406", "2742"]
+  - name: partner_billing_SL_reference     # e.g. "SL-04970-0430-0000-DO-B - Real Gen1-25-0"
+    code: NON_PROCUREMENT
+    field: description
+    regex: '^SL-[0-9]{5}-[0-9]{4}-[0-9]{4}-[A-Z]{2}-[A-Z]'
+  - name: partner_billing_DO_reference     # e.g. "250-200AO EBEE/21 DO241796"
+    code: NON_PROCUREMENT
+    field: description
+    regex: '^[0-9]{3}-[0-9]{3}[A-Z]{2} '
+
+labels:
+  file: company_B/seed_labels.csv
+  id: line_id
+  include: include
+  categories: [category_l1, category_l2, category_l3]
+
+tree:
+  file: company_B/taxonomy_B.csv
+  levels: [category_l1, category_l2, category_l3]
+
+classify:
+  llm:
+    model: llama-3.3-70b-versatile
+    tpm_budget: 5000
+    domain_hint: a metal packaging manufacturer
+    context_fields: [gl_text]
+    batch_items: 40
+    flat_max_leaves: 80
+    refine_below: 0.6
+  context_fields: [gl_text, doc_type, x_source_system, x_supplier_type]

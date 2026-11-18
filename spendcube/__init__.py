@@ -1,0 +1,1 @@
+"""spendcube: config-driven spend data pipeline."""
