@@ -1,8 +1,7 @@
 """Clean amounts, tax, currency and dates. Everything is driven by the config."""
-from pathlib import Path
 import numpy as np
 import pandas as pd
-from .config import ConfigError
+from .config import ConfigError, find_file
 
 _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], 1)}
@@ -106,10 +105,8 @@ def parse_dates(s, default_order="dmy"):
 
 
 # -------------------------------------------------------------------- fx
-def load_fx(fxcfg, data_dir):
-    path = Path(data_dir) / fxcfg["file"]
-    if not path.exists():
-        raise ConfigError(f"fx file not found: {path}")
+def load_fx(fxcfg, data_dir, extra_dirs=()):
+    path = find_file(fxcfg["file"], data_dir, *extra_dirs)
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
     cur = df[fxcfg["currency"]].str.strip().str.upper()
     per = pd.to_datetime(df[fxcfg["month"]].str.strip().str[:7], format="%Y-%m", errors="coerce")
@@ -153,7 +150,7 @@ def clean(df, cfg, data_dir):
     """Add cleaned columns to the ingested frame (one pass per source)."""
     df = df.copy()
     reporting = cfg.get("reporting_currency", "USD").upper()
-    fxtab = load_fx(cfg["fx"], data_dir) if cfg.get("fx") else None
+    fxtab = load_fx(cfg["fx"], data_dir, cfg.get("_extra_dirs", [])) if cfg.get("fx") else None
     fx_min = min(v[0][0] for v in fxtab.values()) if fxtab else None
     fx_max = max(v[0][-1] for v in fxtab.values()) if fxtab else None
     order = cfg.get("date_order", "dmy")

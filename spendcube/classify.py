@@ -7,7 +7,6 @@ Optional layers on top: an LLM (Groq) labels unique items; local embeddings impr
 Confidence is calibrated on held-out data when labels exist.
 """
 import re
-from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix, hstack
@@ -15,7 +14,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import GroupKFold
 from sklearn.svm import LinearSVC
-from .config import ConfigError
+from .config import ConfigError, find_file
 from .match import _OCR, norm_text
 
 SEP = "|"
@@ -27,9 +26,7 @@ def load_tree(cfg, data_dir):
     tc = cfg.get("tree")
     if not tc:
         raise ConfigError("config has no 'tree' block")
-    path = Path(data_dir) / tc["file"]
-    if not path.exists():
-        raise ConfigError(f"tree file not found: {path}")
+    path = find_file(tc["file"], data_dir, *cfg.get("_extra_dirs", []))
     t = pd.read_csv(path, dtype=str, keep_default_na=False)
     t.columns = [c.strip() for c in t.columns]
     levels = tc["levels"]
@@ -97,7 +94,7 @@ class Features:
 def _fit(df, y, ctx_fields, C=0.5, extra=None):
     f = Features(ctx_fields)
     X = f.fit_transform(df, extra)
-    return f, LinearSVC(C=C).fit(X, y)
+    return f, LinearSVC(C=C, random_state=0).fit(X, y)
 
 
 def _scores(model, X):

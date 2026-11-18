@@ -1,4 +1,6 @@
 """Load and validate a company config (YAML)."""
+from pathlib import Path
+
 import yaml
 
 # The canonical record every company is mapped into.
@@ -38,3 +40,25 @@ def validate(cfg):
         if name in seen:
             raise ConfigError(f"duplicate source name '{name}'")
         seen.add(name)
+
+
+def find_file(rel, *dirs):
+    """Locate a file named in a config. Tries each directory in turn: the exact relative path, then the
+    bare file name, then a search below the directory (so a different folder layout still works)."""
+    name = Path(rel).name
+    for d in dirs:
+        if d is None:
+            continue
+        d = Path(d)
+        for cand in (d / rel, d / name):
+            if cand.is_file():
+                return cand
+    for d in dirs:
+        if d is None or not Path(d).is_dir():
+            continue
+        hits = sorted(Path(d).rglob(name))
+        hits = [h for h in hits if h.is_file()]
+        if hits:
+            return hits[0]
+    raise ConfigError(f"file '{rel}' not found in: " + ", ".join(str(d) for d in dirs if d is not None))
+

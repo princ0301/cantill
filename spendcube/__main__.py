@@ -10,26 +10,75 @@ from .evaluate import exclusion_report, hidden_po_check, entity_report, pairwise
 from .entities import build_keys
 from .classify import load_tree, classify
 from .embed import make_embedder, EmbeddingsUnavailable
+from .pipeline import run_pipeline
+from .output import validate_output
 
 
-def load_dotenv(path=Path(".env")):
-    """Load simple KEY=VALUE entries without overriding the shell environment."""
+def load_dotenv(path=".env"):
+    """Load unset environment variables from a simple .env file."""
+    path = Path(path)
     if not path.is_file():
         return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
             continue
-        key, value = line.split("=", 1)
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, sep, value = line.partition("=")
         key = key.strip()
-        if key.startswith("export "):
-            key = key[7:].strip()
-        if not key or key in os.environ:
+        if not sep or not key or key in os.environ:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         os.environ[key] = value
+
+
+def add_class_args(z):
+    z.add_argument("--llm", action="store_true", help="label items with Groq (needs GROQ_API_KEY)")
+    z.add_argument("--llm-model", help="Groq model (default: config or llama-3.3-70b-versatile)")
+    z.add_argument("--llm-limit", type=int, help="label only the N largest-spend items (quick/cheap test)")
+    z.add_argument("--tpm", type=int, help="tokens per minute budget (free tier 8B: 6000, 70B: 12000; paid: much higher)")
+    z.add_argument("--cache-dir", default=".llm_cache", help="where LLM answers are cached")
+    z.add_argument("--refine-below", type=float, help="with labels: send items below this confidence to the LLM")
+    z.add_argument("--no-second-opinion", action="store_true", help="never let the model override an LLM label")
+    z.add_argument("--embeddings", action="store_true", help="use local sentence embeddings (see embed.py)")
+    z.add_argument("--embeddings-backend", help="sentence-transformers | fastembed | hash")
+
+
+def make_llm_factory(args, cfg):
+    """Returns a function tree -> Labeler (or None when --llm is not given)."""
+    cc = cfg.setdefault("classify", {})
+    if args.no_second_opinion:
+        cc.setdefault("llm", {}).setdefault("second_opinion", {})["enabled"] = False
+    if not args.llm:
+        return None
+
+    def factory(tree):
+        from .llm import GroqClient, Labeler
+        lcfg = cc.get("llm", {})
+        model = args.llm_model or lcfg.get("model", "llama-3.3-70b-versatile")
+        client = GroqClient(model=model, tpm_budget=args.tpm or lcfg.get("tpm_budget", 5000), rpm=lcfg.get("rpm", 25))
+        print(f"LLM: {model}, tokens/min budget {client.tpm}, cache {args.cache_dir}")
+        return Labeler(tree, cfg, client, cache_path=Path(args.cache_dir) / f"{cfg['company']}_{model.replace('/', '_')}.jsonl")
+    return factory
+
+
+def make_embedder_from_args(args, cfg):
+    if not (args.embeddings or args.embeddings_backend):
+        return None
+    ecfg = dict(cfg.setdefault("classify", {}).get("embeddings", {}))
+    if args.embeddings_backend:
+        ecfg["backend"] = args.embeddings_backend
+    try:
+        embedder = make_embedder(ecfg)
+        embedder.encode(["test"])
+        print(f"embeddings: {ecfg.get('backend', 'sentence-transformers')} {ecfg.get('model', '')}")
+        return embedder
+    except EmbeddingsUnavailable as e:
+        print(f"WARNING: embeddings unavailable, continuing without them: {e}")
+        return None
 
 
 def main():
@@ -63,16 +112,20 @@ def main():
     z.add_argument("--labels-dir", help="where the labels file lives (default: --data-dir)")
     z.add_argument("--no-labels", action="store_true", help="zero-label mode: ignore labels (they are still used to score)")
     z.add_argument("--holdout", type=float, default=0.0, help="train on labels minus this share, score on the share")
-    z.add_argument("--llm", action="store_true", help="label items with Groq (needs GROQ_API_KEY)")
-    z.add_argument("--llm-model", help="Groq model (default: config or llama-3.3-70b-versatile)")
-    z.add_argument("--llm-limit", type=int, help="label only the N largest-spend items (quick/cheap test)")
-    z.add_argument("--tpm", type=int, help="tokens per minute budget (free tier 8B: 6000, 70B: 12000; paid: much higher)")
-    z.add_argument("--cache-dir", default=".llm_cache", help="where LLM answers are cached")
-    z.add_argument("--refine-below", type=float, help="with labels: send items below this confidence to the LLM")
-    z.add_argument("--no-second-opinion", action="store_true", help="never let the model override an LLM label")
-    z.add_argument("--embeddings", action="store_true", help="use local sentence embeddings (see embed.py)")
-    z.add_argument("--embeddings-backend", help="sentence-transformers | fastembed | hash")
+    add_class_args(z)
     z.add_argument("--save")
+    r = sub.add_parser("run", help="the whole pipeline: write the output file for a company and validate it")
+    r.add_argument("--config", required=True)
+    r.add_argument("--data-dir", required=True)
+    r.add_argument("--out", required=True, help="output csv, e.g. outputs/yourname__A.csv")
+    r.add_argument("--labels-dir", help="where labels/tree/fx files live if not in --data-dir (e.g. your original kit)")
+    r.add_argument("--no-labels", action="store_true", help="ignore labels (zero-label mode)")
+    add_class_args(r)
+    v = sub.add_parser("validate", help="check an output file against the brief's rules")
+    v.add_argument("--config", required=True)
+    v.add_argument("--data-dir", required=True)
+    v.add_argument("--file", required=True)
+    v.add_argument("--labels-dir")
     args = p.parse_args()
 
     if args.cmd == "ingest":
@@ -181,34 +234,14 @@ def main():
             hold = holdout_ids(df, labels, args.holdout)
             train = labels.copy()
             train["usable"] = train["usable"].astype(bool) & ~train.index.isin(hold)
-        cc = cfg.setdefault("classify", {})
-        if args.no_second_opinion:
-            cc.setdefault("llm", {}).setdefault("second_opinion", {})["enabled"] = False
-        llm = embedder = None
-        if args.llm:
-            from .llm import GroqClient, Labeler
-            lcfg = cc.get("llm", {})
-            model = args.llm_model or lcfg.get("model", "llama-3.3-70b-versatile")
-            client = GroqClient(model=model, tpm_budget=args.tpm or lcfg.get("tpm_budget", 5000), rpm=lcfg.get("rpm", 25))
-            llm = Labeler(tree, cfg, client, cache_path=Path(args.cache_dir) / f"{cfg['company']}_{model.replace('/', '_')}.jsonl")
-            print(f"LLM: {model}, tokens/min budget {client.tpm}, cache {args.cache_dir}")
-        if args.embeddings or args.embeddings_backend:
-            ecfg = dict(cc.get("embeddings", {}))
-            if args.embeddings_backend:
-                ecfg["backend"] = args.embeddings_backend
-            try:
-                embedder = make_embedder(ecfg)
-                embedder.encode(["test"])
-                print(f"embeddings: {ecfg.get('backend', 'sentence-transformers')} {ecfg.get('model', '')}")
-            except EmbeddingsUnavailable as e:
-                print(f"WARNING: embeddings unavailable, continuing without them: {e}")
-                embedder = None
+        factory = make_llm_factory(args, cfg)
+        llm = factory(tree) if factory else None
+        embedder = make_embedder_from_args(args, cfg)
         out = classify(df, cfg, tree, labels=train, llm=llm, embedder=embedder,
                        llm_limit=args.llm_limit, refine_below=args.refine_below)
         print(f"tree: {len(tree)} leaves, {n} levels | methods: {out['class_method'].replace('', pd.NA).dropna().value_counts().to_dict()}")
         if llm is not None:
-            print(f"LLM usage: {llm.client.calls} calls, {llm.client.tokens_used:,} tokens, "
-                  f"{llm.asked:,} new item answers requested, {llm.cache_hits:,} restored from checkpoint")
+            print(f"LLM usage: {llm.client.calls} calls, {llm.client.tokens_used:,} tokens, {llm.asked:,} item answers requested")
         if "cv_leaf_accuracy" in out.attrs:
             print(f"cross-validated leaf accuracy on training lines: {out.attrs['cv_leaf_accuracy']:.3f}")
         if labels is not None and "leaf" in labels:
@@ -231,6 +264,46 @@ def main():
             Path(args.save).parent.mkdir(parents=True, exist_ok=True)
             out.to_csv(args.save, index=False)
             print("saved", args.save)
+
+    if args.cmd == "run":
+        cfg = load_config(args.config)
+        full, out, errors, notes, timings = run_pipeline(
+            cfg, args.data_dir, labels_dir=args.labels_dir, use_labels=not args.no_labels,
+            llm_factory=make_llm_factory(args, cfg), embedder=make_embedder_from_args(args, cfg),
+            llm_limit=args.llm_limit, refine_below=args.refine_below)
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(args.out, index=False)
+        print(f"\nwrote {args.out}  ({len(out):,} rows, total {timings['total']}s)")
+        print(pd.crosstab(full["source"], full["exclusion_reason"].replace("", "(included)")).to_string())
+        inc = out[out["include"] == 1]
+        by = inc.groupby("l1")["spend"].sum().sort_values(ascending=False)
+        print(f"\nincluded spend {inc['spend'].sum():,.2f} {cfg.get('reporting_currency', '')}; top level-1 categories:")
+        print((by / by.sum()).head(8).round(3).to_string())
+        print("\nclassification methods:", full["class_method"].replace("", pd.NA).dropna().value_counts().to_dict())
+        for line in notes:
+            print("note:", line)
+        if errors:
+            print("\nVALIDATION FAILED:")
+            for e in errors:
+                print("  -", e)
+            raise SystemExit(1)
+        print("validation passed")
+
+    if args.cmd == "validate":
+        cfg = load_config(args.config)
+        cfg["_extra_dirs"] = [d for d in [args.labels_dir] if d]
+        ids = ingest(cfg, args.data_dir)["record_id"].tolist()
+        out = pd.read_csv(args.file, dtype={"exclusion_reason": str, "l1": str, "l2": str, "l3": str, "l4": str,
+                                            "supplier_key": str, "item_key": str, "record_id": str}, keep_default_na=False)
+        for c in ("spend", "confidence", "include"):
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+        errors, notes = validate_output(out, ids, load_tree(cfg, args.data_dir))
+        for line in notes:
+            print("note:", line)
+        for e in errors:
+            print("ERROR:", e)
+        print("validation passed" if not errors else "VALIDATION FAILED")
+        raise SystemExit(1 if errors else 0)
 
 
 if __name__ == "__main__":

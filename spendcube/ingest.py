@@ -1,7 +1,7 @@
 """Read raw files and map them to the canonical record. No cleaning here."""
 from pathlib import Path
 import pandas as pd
-from .config import CANON_FIELDS, ConfigError
+from .config import CANON_FIELDS, ConfigError, find_file
 
 
 def _read(path, src):
@@ -30,10 +30,8 @@ def _pull(df, cols):
     return out
 
 
-def load_source(src, data_dir):
-    path = Path(data_dir) / src["file"]
-    if not path.exists():
-        raise ConfigError(f"file not found: {path}")
+def load_source(src, data_dir, extra_dirs=()):
+    path = find_file(src["file"], data_dir, *extra_dirs)
     df = _read(path, src)
     df.columns = [c.strip() for c in df.columns]
 
@@ -58,7 +56,7 @@ def load_source(src, data_dir):
 
 
 def ingest(cfg, data_dir):
-    frames = [load_source(s, data_dir) for s in cfg["sources"]]
+    frames = [load_source(s, data_dir, cfg.get("_extra_dirs", [])) for s in cfg["sources"]]
     df = pd.concat(frames, ignore_index=True).fillna("")
     dup = df["record_id"].duplicated().sum()
     if dup:
@@ -66,15 +64,15 @@ def ingest(cfg, data_dir):
     return df
 
 
-
 def load_labels(cfg, labels_dir):
     """Golden keys from a labelled file named in the config (`labels:` block), or None."""
     lc = cfg.get("labels")
     if not lc:
         return None
-    path = Path(labels_dir) / lc["file"]
-    if not path.exists():
-        print(f"note: labels file {path} not found; running without labels")
+    try:
+        path = find_file(lc["file"], labels_dir, *cfg.get("_extra_dirs", []))
+    except ConfigError:
+        print(f"note: labels file '{lc['file']}' not found under {labels_dir}; running without labels")
         return None
     lab = pd.read_csv(path, dtype=str, keep_default_na=False)
     idc = lc.get("id", "record_id")
