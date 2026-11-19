@@ -1,0 +1,43 @@
+# Blind-test configuration for Company C: USD oil-and-gas invoice lines.
+company: C
+reporting_currency: USD
+
+sources:
+  - name: lines
+    file: invoice_lines.csv
+    id: {prefix: "", column: line_id}
+    columns:
+      date: invoice_date
+      supplier: supplier_name
+      description: [line_description, product_service_description, invoice_description]
+      item_code: product_service_code
+      quantity: quantity
+      amount: line_amount_usd
+      status: status
+      invoice: invoice_number
+      gl_text: gl_account_description
+    amount_basis: net
+    status:
+      include: [Approved]
+      cancelled: [Cancelled]
+    extra: [submission_type, buyer_entity, uom]
+
+tree:
+  file: category_tree_C.csv
+  levels: [level_1, level_2, level_3, level_4]
+
+entities:
+  supplier_merge_threshold: 92
+  text_link_min_share: 0.8
+  item_fuzzy_threshold: 92
+
+classify:
+  context_fields: [gl_text, x_submission_type, x_buyer_entity]
+  llm:
+    model: openai/gpt-oss-120b
+    tpm_budget: 200000
+    domain_hint: an upstream oil and gas operator in the United States
+    context_fields: [gl_text, x_submission_type]
+    batch_items: 40
+    flat_max_leaves: 80
+    refine_below: 0.6
